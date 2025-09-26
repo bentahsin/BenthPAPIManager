@@ -38,7 +38,7 @@ BenthPapiManager yeni placeholder'lar eklemeyi son derece basit ve düzenli hale
 
 <dependencies>
     <dependency>
-        <groupId>com.bentahsin</groupId>
+        <groupId>com.github.bentahsin</groupId>
         <artifactId>benth-papi-manager</artifactId>
         <version>v1.0.0</version>
         <scope>compile</scope>

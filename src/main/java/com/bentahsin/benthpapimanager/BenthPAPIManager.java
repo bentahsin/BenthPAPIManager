@@ -12,13 +12,16 @@ import org.jetbrains.annotations.NotNull;
 import org.reflections.Reflections;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 
+/**
+ * PlaceholderAPI için anotasyon tabanlı, yüksek performanslı bir placeholder yönetim kütüphanesi.
+ */
 public class BenthPAPIManager {
 
     private final JavaPlugin plugin;
@@ -28,8 +31,10 @@ public class BenthPAPIManager {
     }
 
     /**
-     * Anotasyonlu placeholder'ları tarar, ön belleğe alır ve PlaceholderAPI'ye kaydeder.
-     * @param packageName Taranacak paket adı.
+     * Belirtilen paketteki tüm @Placeholder anotasyonuna sahip sınıfları tarar,
+     * metotlarını ön belleğe alır ve PlaceholderAPI'ye kaydeder.
+     *
+     * @param packageName Taranacak paket adı (örn: "com.benimpluginim.placeholders").
      */
     public void registerPlaceholders(String packageName) {
         if (plugin.getServer().getPluginManager().getPlugin("PlaceholderAPI") == null) {
@@ -68,7 +73,7 @@ public class BenthPAPIManager {
     }
 
     /**
-     * @Inject anotasyonuna sahip alanlara ana plugin'i enjekte eder.
+     * Bir sınıfın örneğini tarayarak @Inject anotasyonuna sahip alanlara ana plugin'i enjekte eder.
      */
     private void handleInjections(Class<?> clazz, Object instance) throws IllegalAccessException {
         for (Field field : clazz.getDeclaredFields()) {
@@ -80,12 +85,14 @@ public class BenthPAPIManager {
     }
 
     /**
-     * Placeholder metotlarını ön belleğe alarak yüksek performanslı bir PlaceholderExpansion oluşturur.
+     * Bir sınıfı tarayarak placeholder metotlarını ön belleğe alır ve
+     * bu metotları işleyecek yüksek performanslı bir PlaceholderExpansion oluşturur.
      */
     private PlaceholderExpansion createExpansion(Placeholder info, Class<?> clazz, Object instance) {
         final Map<String, Method> relationalMethods = new HashMap<>();
         final Map<String, PlaceholderMethod> standardMethods = new HashMap<>();
 
+        // Metotları sadece bir kez tara ve verimli erişim için haritalara yerleştir (Caching).
         for (Method method : clazz.getMethods()) {
             if (method.isAnnotationPresent(RelationalPlaceholder.class)) {
                 RelationalPlaceholder annotation = method.getAnnotation(RelationalPlaceholder.class);
@@ -99,16 +106,14 @@ public class BenthPAPIManager {
         return new DynamicExpansion(plugin, info, instance, relationalMethods, standardMethods);
     }
 
-    // --- Yardımcı Veri Sınıfları ---
-
     /**
-     * Standart placeholder metotlarını ve anotasyonlarını bir arada tutan bir sınıf.
+     * Standart placeholder metotlarını ve ilgili anotasyonlarını bir arada tutan bir veri sınıfı.
      */
     private static final class PlaceholderMethod {
         final Method method;
         final PlaceholderIdentifier annotation;
 
-        public PlaceholderMethod(Method method, PlaceholderIdentifier annotation) {
+        PlaceholderMethod(Method method, PlaceholderIdentifier annotation) {
             this.method = method;
             this.annotation = annotation;
         }
@@ -116,6 +121,7 @@ public class BenthPAPIManager {
 
     /**
      * Okunabilirlik ve performans için anonim sınıf yerine kullanılan özel PlaceholderExpansion uygulaması.
+     * Gelen istekleri ön belleğe alınmış metotlar üzerinden hızlıca işler.
      */
     private static class DynamicExpansion extends PlaceholderExpansion {
         private final JavaPlugin plugin;
@@ -124,7 +130,7 @@ public class BenthPAPIManager {
         private final Map<String, Method> relationalMethods;
         private final Map<String, PlaceholderMethod> standardMethods;
 
-        public DynamicExpansion(JavaPlugin plugin, Placeholder info, Object instance, Map<String, Method> relationalMethods, Map<String, PlaceholderMethod> standardMethods) {
+        DynamicExpansion(JavaPlugin plugin, Placeholder info, Object instance, Map<String, Method> relationalMethods, Map<String, PlaceholderMethod> standardMethods) {
             this.plugin = plugin;
             this.placeholderInfo = info;
             this.placeholderInstance = instance;
@@ -152,18 +158,21 @@ public class BenthPAPIManager {
                     return relationalMethod.getAnnotation(RelationalPlaceholder.class).onError();
                 }
             }
-            return null;
+            return null; // PAPI'nin onRequest'e düşmesine izin ver
         }
 
         @Override
         public String onRequest(OfflinePlayer player, @NotNull String params) {
             String lowerParams = params.toLowerCase();
 
+            // 1. Önce gelen parametrenin tamamıyla eşleşen bir metot var mı diye kontrol et.
+            // Bu, "toplam_eslesme" gibi alt tireli ama parametresiz olanları yakalar.
             PlaceholderMethod pMethod = standardMethods.get(lowerParams);
             if (pMethod != null) {
                 return invokeStandardMethod(pMethod.method, pMethod.annotation, player, null);
             }
 
+            // 2. Tam eşleşme yoksa, "identifier_parametreler" formatında olup olmadığını kontrol et.
             String[] parts = lowerParams.split("_", 2);
             if (parts.length > 1) {
                 String identifier = parts[0];
@@ -175,35 +184,38 @@ public class BenthPAPIManager {
                 }
             }
 
-            return null;
+            return null; // Uygun placeholder bulunamadı.
         }
 
         private String invokeStandardMethod(Method method, PlaceholderIdentifier annotation, OfflinePlayer player, String params) {
             try {
-                if (method.getReturnType() != String.class) return null;
+                if (method.getReturnType() != String.class) return null; // Sadece String döndüren metotlar desteklenir.
                 Class<?>[] paramTypes = method.getParameterTypes();
                 int paramCount = method.getParameterCount();
 
+                // Parametreli metot çağrısı (örn: onSomething(Player, String))
                 if (params != null && paramCount == 2 && paramTypes[1] == String.class) {
                     if (player == null) return annotation.onError();
                     if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer(), params) : annotation.onError();
                     if (paramTypes[0] == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player, params);
                 }
-                else if (paramCount == 1) {
+                // Oyuncu gerektiren parametresiz metot çağrısı (örn: onSomething(Player))
+                else if (params == null && paramCount == 1) {
                     if (player == null) return annotation.onError();
                     if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer()) : annotation.onError();
                     if (paramTypes[0] == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player);
                 }
+                // Ne oyuncu ne de parametre gerektiren metot çağrısı (örn: onSomething())
                 else if (paramCount == 0) {
                     return (String) method.invoke(placeholderInstance);
                 }
 
             } catch (IllegalAccessException | InvocationTargetException e) {
-                plugin.getLogger().log(Level.WARNING, "Placeholder metodu çalıştırılırken hata oluştu: " + method.getName(), e);
+                plugin.getLogger().log(Level.WARNING, "Placeholder metodu çalıştırılırken hata oluştu: " + method.getName(), e.getCause() != null ? e.getCause() : e);
                 return annotation.onError();
             }
 
-            return null;
+            return null; // Metot imzası desteklenen formatlardan biriyle eşleşmedi.
         }
     }
 }

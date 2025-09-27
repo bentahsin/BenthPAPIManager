@@ -86,7 +86,6 @@ public class BenthPAPIManager {
         final Map<String, Method> relationalMethods = new HashMap<>();
         final Map<String, PlaceholderMethod> standardMethods = new HashMap<>();
 
-        // Metotları sadece bir kez tara ve haritalara yerleştir (Caching)
         for (Method method : clazz.getMethods()) {
             if (method.isAnnotationPresent(RelationalPlaceholder.class)) {
                 RelationalPlaceholder annotation = method.getAnnotation(RelationalPlaceholder.class);
@@ -142,7 +141,6 @@ public class BenthPAPIManager {
         public String onPlaceholderRequest(Player player, @NotNull String identifier) {
             if (player == null) return "";
 
-            // Önbellekten hızlıca metodu bul (O(1) karmaşıklık)
             Method relationalMethod = relationalMethods.get(identifier.toLowerCase());
             if (relationalMethod != null) {
                 try {
@@ -154,30 +152,27 @@ public class BenthPAPIManager {
                     return relationalMethod.getAnnotation(RelationalPlaceholder.class).onError();
                 }
             }
-            // PAPI'nin onRequest'e düşmesine izin ver
             return null;
         }
 
         @Override
         public String onRequest(OfflinePlayer player, @NotNull String params) {
             String lowerParams = params.toLowerCase();
-            String[] parts = lowerParams.split("_", 2);
-            String identifier = parts[0];
-            String methodParams = parts.length > 1 ? parts[1] : null;
 
-            // Önce parametreli haliyle ara (örn: "level_formatted")
-            PlaceholderMethod pMethod = standardMethods.get(identifier);
-
-            // Bulamazsa, tam eşleşme ara (örn: "playername")
-            if (pMethod == null) {
-                pMethod = standardMethods.get(lowerParams);
-                if (pMethod != null) {
-                    methodParams = null; // Tam eşleşme durumunda parametre olmaz.
-                }
+            PlaceholderMethod pMethod = standardMethods.get(lowerParams);
+            if (pMethod != null) {
+                return invokeStandardMethod(pMethod.method, pMethod.annotation, player, null);
             }
 
-            if (pMethod != null) {
-                return invokeStandardMethod(pMethod.method, pMethod.annotation, player, methodParams);
+            String[] parts = lowerParams.split("_", 2);
+            if (parts.length > 1) {
+                String identifier = parts[0];
+                String methodParams = parts[1];
+
+                pMethod = standardMethods.get(identifier);
+                if (pMethod != null) {
+                    return invokeStandardMethod(pMethod.method, pMethod.annotation, player, methodParams);
+                }
             }
 
             return null;

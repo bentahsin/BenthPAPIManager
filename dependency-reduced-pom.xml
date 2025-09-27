@@ -4,7 +4,7 @@
   <groupId>com.bentahsin</groupId>
   <artifactId>benth-papi-manager</artifactId>
   <name>BenthPapiManager</name>
-  <version>1.0.0-RELEASE</version>
+  <version>1.0.1-RELEASE</version>
   <description>Annotation based PlaceholderAPI library.</description>
   <build>
     <plugins>

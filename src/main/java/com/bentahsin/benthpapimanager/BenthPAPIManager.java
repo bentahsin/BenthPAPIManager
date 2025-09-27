@@ -18,10 +18,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 
-/**
- * PlaceholderAPI için anotasyon tabanlı, yüksek performanslı bir placeholder yönetim kütüphanesi.
- * Bu sınıf, belirtilen paketteki sınıfları tarayarak placeholder'ları otomatik olarak kaydeder.
- */
 public final class BenthPAPIManager {
 
     private final JavaPlugin plugin;
@@ -30,12 +26,6 @@ public final class BenthPAPIManager {
         this.plugin = plugin;
     }
 
-    /**
-     * Belirtilen paketteki tüm @Placeholder anotasyonuna sahip sınıfları tarar,
-     * metotlarını ön belleğe alır ve PlaceholderAPI'ye kaydeder.
-     *
-     * @param packageName Taranacak paket adı (örn: "com.benimpluginim.placeholders").
-     */
     public void registerPlaceholders(String packageName) {
         if (plugin.getServer().getPluginManager().getPlugin("PlaceholderAPI") == null) {
             plugin.getLogger().warning("PlaceholderAPI bulunamadı, BenthPAPIManager placeholder'ları kaydedemedi.");
@@ -70,9 +60,6 @@ public final class BenthPAPIManager {
         }
     }
 
-    /**
-     * Bir sınıfın örneğini tarayarak @Inject anotasyonuna sahip alanlara ana plugin'i enjekte eder.
-     */
     private void handleInjections(Class<?> clazz, Object instance) throws IllegalAccessException {
         for (Field field : clazz.getDeclaredFields()) {
             if (field.isAnnotationPresent(Inject.class) && JavaPlugin.class.isAssignableFrom(field.getType())) {
@@ -82,43 +69,31 @@ public final class BenthPAPIManager {
         }
     }
 
-    /**
-     * Bir sınıfı tarayarak placeholder metotlarını ön belleğe alır ve
-     * bu metotları işleyecek yüksek performanslı bir PlaceholderExpansion oluşturur.
-     */
     private PlaceholderExpansion createExpansion(Placeholder info, Class<?> clazz, Object instance) {
         final Map<String, Method> relationalMethods = new HashMap<>();
         final Map<String, PlaceholderMethod> standardMethods = new HashMap<>();
 
         for (Method method : clazz.getMethods()) {
             if (method.isAnnotationPresent(RelationalPlaceholder.class)) {
-                RelationalPlaceholder annotation = method.getAnnotation(RelationalPlaceholder.class);
-                relationalMethods.put(annotation.identifier().toLowerCase(), method);
+                relationalMethods.put(method.getAnnotation(RelationalPlaceholder.class).identifier().toLowerCase(), method);
             }
             if (method.isAnnotationPresent(PlaceholderIdentifier.class)) {
-                PlaceholderIdentifier annotation = method.getAnnotation(PlaceholderIdentifier.class);
-                standardMethods.put(annotation.identifier().toLowerCase(), new PlaceholderMethod(method, annotation));
+                standardMethods.put(method.getAnnotation(PlaceholderIdentifier.class).identifier().toLowerCase(), new PlaceholderMethod(method));
             }
         }
         return new DynamicExpansion(plugin, info, instance, relationalMethods, standardMethods);
     }
 
-    /**
-     * Standart placeholder metotlarını ve ilgili anotasyonlarını bir arada tutan bir veri sınıfı.
-     */
     private static final class PlaceholderMethod {
         final Method method;
         final PlaceholderIdentifier annotation;
 
-        PlaceholderMethod(Method method, PlaceholderIdentifier annotation) {
+        PlaceholderMethod(Method method) {
             this.method = method;
-            this.annotation = annotation;
+            this.annotation = method.getAnnotation(PlaceholderIdentifier.class);
         }
     }
 
-    /**
-     * Gelen istekleri ön belleğe alınmış metotlar üzerinden hızlıca işleyen özel PlaceholderExpansion uygulaması.
-     */
     private static class DynamicExpansion extends PlaceholderExpansion {
         private final JavaPlugin plugin;
         private final Placeholder placeholderInfo;
@@ -147,7 +122,7 @@ public final class BenthPAPIManager {
                 try {
                     return (String) relationalMethod.invoke(placeholderInstance, player);
                 } catch (Exception e) {
-                    plugin.getLogger().log(Level.WARNING, "Relational placeholder hatası: " + relationalMethod.getName(), e.getCause());
+                    logError(relationalMethod, e);
                     return relationalMethod.getAnnotation(RelationalPlaceholder.class).onError();
                 }
             }
@@ -156,69 +131,60 @@ public final class BenthPAPIManager {
 
         @Override
         public String onRequest(OfflinePlayer player, @NotNull String params) {
-            String lowerParams = params.toLowerCase();
+            String currentParams = params.toLowerCase();
 
-            // 1. Önce gelen parametrenin tamamıyla eşleşen bir metot var mı diye kontrol et.
-            // Bu, "toplam_eslesme" gibi alt tireli ama parametresiz olanları yakalar.
-            PlaceholderMethod pMethod = standardMethods.get(lowerParams);
-            if (pMethod != null) {
-                return invokeStandardMethod(pMethod, player, null);
-            }
-
-            // 2. Tam eşleşme yoksa, "identifier_parametreler" formatında olup olmadığını kontrol et.
-            String[] parts = lowerParams.split("_", 2);
-            if (parts.length > 1) {
-                String identifier = parts[0];
-                String methodParams = parts[1];
-
-                pMethod = standardMethods.get(identifier);
+            while (true) {
+                // 1. En uzun/tam eşleşmeyi ara (örn: "toplam_eslesme" veya "has_item_diamond")
+                PlaceholderMethod pMethod = standardMethods.get(currentParams);
                 if (pMethod != null) {
-                    return invokeStandardMethod(pMethod, player, methodParams);
+                    int lastUnderscore = currentParams.length() == params.length() ? -1 : currentParams.length();
+                    String methodArgs = lastUnderscore == -1 ? null : params.substring(lastUnderscore + 1);
+                    return invokeStandardMethod(pMethod, player, methodArgs);
                 }
+
+                // 2. Eşleşme bulunamazsa, sondan bir önceki alt tireye kadar olan kısmı dene
+                int lastUnderscore = currentParams.lastIndexOf('_');
+                if (lastUnderscore == -1) {
+                    break; // Daha fazla bölünecek alt tire kalmadı.
+                }
+                currentParams = currentParams.substring(0, lastUnderscore);
             }
 
-            return null; // Uygun placeholder bulunamadı.
+            return null; // Hiçbir eşleşme bulunamadı
         }
 
-        private String invokeStandardMethod(PlaceholderMethod placeholderMethod, OfflinePlayer player, String params) {
-            Method method = placeholderMethod.method;
-            PlaceholderIdentifier annotation = placeholderMethod.annotation;
-
+        private String invokeStandardMethod(PlaceholderMethod pMethod, OfflinePlayer player, String args) {
             try {
-                if (method.getReturnType() != String.class) return null;
+                Method method = pMethod.method;
                 int paramCount = method.getParameterCount();
 
-                // Parametreli metot çağrısı (örn: onSomething(Player, String))
-                if (params != null && paramCount == 2) {
-                    if (player == null) return annotation.onError();
+                // Durum 1: Metot parametreli (örn: onSomething(Player, String))
+                if (args != null && paramCount == 2) {
+                    if (player == null) return pMethod.annotation.onError();
                     Class<?> argType = method.getParameterTypes()[0];
-
-                    if (argType == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer(), params) : annotation.onError();
-                    if (argType == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player, params);
+                    if (argType == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer(), args) : pMethod.annotation.onError();
+                    if (argType == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player, args);
                 }
-                // Parametresiz metot çağrısı
-                else if (params == null) {
-                    if (paramCount == 0) { // onSomething()
-                        return (String) method.invoke(placeholderInstance);
-                    }
+                // Durum 2: Metot parametresiz
+                else if (args == null) {
+                    if (paramCount == 0) return (String) method.invoke(placeholderInstance); // onSomething()
                     if (paramCount == 1) { // onSomething(Player)
-                        if (player == null) return annotation.onError();
+                        if (player == null) return pMethod.annotation.onError();
                         Class<?> argType = method.getParameterTypes()[0];
-
-                        if (argType == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer()) : annotation.onError();
+                        if (argType == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer()) : pMethod.annotation.onError();
                         if (argType == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player);
                     }
                 }
-
             } catch (Exception e) {
-                // InvocationTargetException durumunda asıl hatayı (cause) logla, bu geliştirici için daha anlamlıdır.
-                Throwable cause = e.getCause();
-                plugin.getLogger().log(Level.WARNING, "Placeholder metodu çalıştırılırken hata oluştu: " + method.getName(), cause != null ? cause : e);
-                return annotation.onError();
+                logError(pMethod.method, e);
+                return pMethod.annotation.onError();
             }
+            return null; // Metod imzası çağrıyla eşleşmedi
+        }
 
-            // Metodun imza yapısı çağrıyla eşleşmedi (örn: 2 parametreli metot parametresiz çağrıldı).
-            return null;
+        private void logError(Method method, Exception e) {
+            Throwable cause = e.getCause();
+            plugin.getLogger().log(Level.WARNING, "Placeholder metodu çalıştırılırken hata oluştu: " + method.getName(), cause != null ? cause : e);
         }
     }
 }

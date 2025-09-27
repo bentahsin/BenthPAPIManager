@@ -190,18 +190,24 @@ public class BenthPAPIManager {
                 int paramCount = method.getParameterCount();
 
                 if (params != null && paramCount == 2 && paramTypes[1] == String.class) {
-                    if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer(), params) : null;
+                    if (player == null) return annotation.onError();
+                    if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer(), params) : annotation.onError();
                     if (paramTypes[0] == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player, params);
-                } else if (params == null && paramCount == 1) {
-                    if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer()) : null;
+                }
+                else if (paramCount == 1) {
+                    if (player == null) return annotation.onError();
+                    if (paramTypes[0] == Player.class) return player.isOnline() ? (String) method.invoke(placeholderInstance, player.getPlayer()) : annotation.onError();
                     if (paramTypes[0] == OfflinePlayer.class) return (String) method.invoke(placeholderInstance, player);
-                } else if (paramCount == 0) {
+                }
+                else if (paramCount == 0) {
                     return (String) method.invoke(placeholderInstance);
                 }
+
             } catch (IllegalAccessException | InvocationTargetException e) {
                 plugin.getLogger().log(Level.WARNING, "Placeholder metodu çalıştırılırken hata oluştu: " + method.getName(), e);
                 return annotation.onError();
             }
+
             return null;
         }
     }

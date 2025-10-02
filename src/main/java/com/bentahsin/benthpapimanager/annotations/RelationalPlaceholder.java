@@ -25,4 +25,16 @@ public @interface RelationalPlaceholder {
      * @return Hata durumunda gösterilecek metin.
      */
     String onError() default "§cError§r";
+
+    /**
+     * Bu placeholder'ın asenkron olarak çalıştırılıp çalıştırılmayacağını belirtir.
+     * @return true ise asenkron, false ise senkron.
+     */
+    boolean async() default false;
+
+    /**
+     * Asenkron bir placeholder'ın verisi henüz hazır değilken gösterilecek metin.
+     * @return Yükleniyor metni.
+     */
+    String onLoading() default "§eHesaplanıyor...§r";
 }

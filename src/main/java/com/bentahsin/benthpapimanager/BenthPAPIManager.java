@@ -5,6 +5,7 @@ import com.bentahsin.benthpapimanager.annotations.Placeholder;
 import com.bentahsin.benthpapimanager.annotations.PlaceholderIdentifier;
 import com.bentahsin.benthpapimanager.annotations.RelationalPlaceholder;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
+import me.clip.placeholderapi.expansion.Relational;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
 /**
@@ -149,7 +151,15 @@ public final class BenthPAPIManager {
         final Map<String, PlaceholderMethod> relationalMethods = new HashMap<>();
 
         for (Class<?> clazz : classes) {
-            Object instance = clazz.getDeclaredConstructor().newInstance();
+            Object instance;
+            try {
+                instance = clazz.getDeclaredConstructor().newInstance();
+            } catch (NoSuchMethodException e) {
+                plugin.getLogger().severe("HATA: '" + clazz.getName() + "' sınıfının boş (parametresiz) bir constructor'ı yok!");
+                plugin.getLogger().severe("Lütfen 'public " + clazz.getSimpleName() + "() {}' ekleyin.");
+                continue;
+            }
+
             handleInjections(clazz, instance);
 
             for (Method method : clazz.getMethods()) {
@@ -203,13 +213,15 @@ public final class BenthPAPIManager {
         }
     }
 
-    private static class DynamicExpansion extends PlaceholderExpansion {
+    private static class DynamicExpansion extends PlaceholderExpansion implements Relational {
         private final JavaPlugin plugin;
         private final Placeholder placeholderInfo;
         private final Map<String, PlaceholderMethod> standardMethods;
         private final Map<String, PlaceholderMethod> relationalMethods;
         private final String defaultErrorText;
         private final boolean debug;
+
+        private final Map<String, CachedResult> cache = new ConcurrentHashMap<>();
 
         DynamicExpansion(JavaPlugin plugin, Placeholder info, Map<String, PlaceholderMethod> standardMethods, Map<String, PlaceholderMethod> relationalMethods, String defaultErrorText, boolean debug) {
             this.plugin = plugin;
@@ -225,9 +237,17 @@ public final class BenthPAPIManager {
         @Override public @NotNull String getVersion() { return placeholderInfo.version(); }
         @Override public boolean persist() { return true; }
 
-
         @Override
-        public String onPlaceholderRequest(Player player, @NotNull String params) {
+        public String onPlaceholderRequest(Player one, Player two, String params) {
+            if (one == null || two == null) return null;
+
+            for (Map.Entry<String, PlaceholderMethod> entry : relationalMethods.entrySet()) {
+                String id = entry.getKey();
+                if (params.equalsIgnoreCase(id) || params.toLowerCase().startsWith(id + "_")) {
+                    String arg = params.length() > id.length() ? params.substring(id.length() + 1) : null;
+                    return handleRelational(one, two, entry.getValue(), arg, params);
+                }
+            }
             return null;
         }
 
@@ -252,88 +272,115 @@ public final class BenthPAPIManager {
                         getIdentifier(), params, (player != null ? player.getName() : "null")));
             }
 
-            if (player == null) return "";
+            String matchedId = null;
+            PlaceholderMethod matchedMethod = null;
 
-            String[] relParts = params.split("_", 2);
-            if (relParts.length > 1) {
-                String relIdentifier = relParts[0].toLowerCase();
-                PlaceholderMethod relMethod = relationalMethods.get(relIdentifier);
-
-                if (relMethod != null) {
-                    if (relMethod.relAnnotation.async()) {
-                        Bukkit.getScheduler().runTaskAsynchronously(this.plugin, () -> handleRelationalRequest(player, params, relMethod));
-                        return relMethod.relAnnotation.onLoading();
+            for (Map.Entry<String, PlaceholderMethod> entry : standardMethods.entrySet()) {
+                String id = entry.getKey();
+                if (params.equalsIgnoreCase(id) || params.toLowerCase().startsWith(id + "_")) {
+                    if (matchedId == null || id.length() > matchedId.length()) {
+                        matchedId = id;
+                        matchedMethod = entry.getValue();
                     }
-                    return handleRelationalRequest(player, params, relMethod);
                 }
             }
 
-            String[] parts = params.split("_", 2);
-            String identifier = parts[0].toLowerCase();
-            PlaceholderMethod pMethod = standardMethods.get(identifier);
-
-            if (pMethod != null) {
-                if (pMethod.annotation.async()) {
-                    Bukkit.getScheduler().runTaskAsynchronously(this.plugin, () -> handleStandardRequest(player, params, pMethod));
-                    return pMethod.annotation.onLoading();
-                }
-                return handleStandardRequest(player, params, pMethod);
+            if (matchedMethod != null) {
+                String argument = params.length() > matchedId.length() ? params.substring(matchedId.length() + 1) : null;
+                return handleStandard(player, matchedMethod, argument, params);
             }
 
             return null;
         }
 
-        private String handleStandardRequest(OfflinePlayer viewer, String params, PlaceholderMethod pMethod) {
-            try {
-                String[] parts = params.split("_", 2);
-                String argument = (parts.length > 1) ? parts[1] : null;
+        private String handleStandard(OfflinePlayer viewer, PlaceholderMethod pMethod, String arg, String fullParams) {
+            if (pMethod.annotation.async()) {
+                String cacheKey = "std:" + (viewer != null ? viewer.getUniqueId() : "null") + ":" + fullParams;
+                CachedResult cached = cache.get(cacheKey);
 
-                Method method = pMethod.method;
-                int paramCount = method.getParameterCount();
-                Object result = null;
-
-                if (paramCount == 0) {
-                    result = method.invoke(pMethod.instance);
-                } else if (paramCount == 1) {
-                    Class<?> argType = method.getParameterTypes()[0];
-                    if (argType.isAssignableFrom(Player.class)) result = viewer.isOnline() ? method.invoke(pMethod.instance, viewer.getPlayer()) : getErrorText(pMethod);
-                    else if (argType.isAssignableFrom(OfflinePlayer.class)) result = method.invoke(pMethod.instance, viewer);
-                } else if (paramCount == 2) {
-                    if (argument == null) return getErrorText(pMethod);
-                    Class<?> playerType = method.getParameterTypes()[0];
-                    Class<?> argType = method.getParameterTypes()[1];
-                    if (argType != String.class) return getErrorText(pMethod);
-                    if (playerType.isAssignableFrom(Player.class)) result = viewer.isOnline() ? method.invoke(pMethod.instance, viewer.getPlayer(), argument) : getErrorText(pMethod);
-                    else if (playerType.isAssignableFrom(OfflinePlayer.class)) result = method.invoke(pMethod.instance, viewer, argument);
+                if (cached != null && !cached.isExpired()) {
+                    return cached.value;
                 }
-                return result != null ? String.valueOf(result) : null;
+
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    String result = executeStandard(viewer, pMethod, arg);
+                    cache.put(cacheKey, new CachedResult(result));
+                });
+
+                return cached != null ? cached.value : pMethod.annotation.onLoading();
+            }
+
+            return executeStandard(viewer, pMethod, arg);
+        }
+
+        private String handleRelational(Player one, Player two, PlaceholderMethod rMethod, String arg, String fullParams) {
+            if (rMethod.relAnnotation.async()) {
+                String cacheKey = "rel:" + one.getUniqueId() + ":" + two.getUniqueId() + ":" + fullParams;
+                CachedResult cached = cache.get(cacheKey);
+
+                if (cached != null && !cached.isExpired()) {
+                    return cached.value;
+                }
+
+                Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
+                    String result = executeRelational(one, two, rMethod, arg);
+                    cache.put(cacheKey, new CachedResult(result));
+                });
+
+                return cached != null ? cached.value : rMethod.relAnnotation.onLoading();
+            }
+
+            return executeRelational(one, two, rMethod, arg);
+        }
+
+        private String executeStandard(OfflinePlayer viewer, PlaceholderMethod pMethod, String argument) {
+            try {
+                Method method = pMethod.method;
+                Object instance = pMethod.instance;
+                Object result = null;
+                int count = method.getParameterCount();
+
+                if (count == 0) {
+                    result = method.invoke(instance);
+                } else if (count == 1) {
+                    if (method.getParameterTypes()[0] == String.class) {
+                        result = method.invoke(instance, argument);
+                    } else {
+                        Object pArg = viewer != null && viewer.isOnline() ? viewer.getPlayer() : viewer;
+                        if (pArg != null && method.getParameterTypes()[0].isAssignableFrom(pArg.getClass())) {
+                            result = method.invoke(instance, pArg);
+                        } else if (pArg == null) {
+                            return "";
+                        } else {
+                            return getErrorText(pMethod);
+                        }
+                    }
+                } else if (count == 2) {
+                    Object pArg = viewer != null && viewer.isOnline() ? viewer.getPlayer() : viewer;
+                    result = method.invoke(instance, pArg, argument);
+                }
+
+                return result == null ? "" : String.valueOf(result);
             } catch (Exception e) {
                 logError(pMethod.method, e);
                 return getErrorText(pMethod);
             }
         }
 
-        private String handleRelationalRequest(OfflinePlayer viewer, String params, PlaceholderMethod relMethod) {
+        private String executeRelational(Player one, Player two, PlaceholderMethod rMethod, String argument) {
             try {
-                String[] relParts = params.split("_", 2);
-                String targetPlayerName = relParts[1];
-                Player targetPlayer = Bukkit.getPlayerExact(targetPlayerName);
+                Method method = rMethod.method;
+                Object result;
 
-                if (!viewer.isOnline()) return getRelationalErrorText(relMethod);
-                if (targetPlayer == null) return getRelationalErrorText(relMethod);
-
-                if (relMethod.method.getParameterCount() == 2 &&
-                        relMethod.method.getParameterTypes()[0] == Player.class &&
-                        relMethod.method.getParameterTypes()[1] == Player.class) {
-                    Object result = relMethod.method.invoke(relMethod.instance, viewer.getPlayer(), targetPlayer);
-                    return String.valueOf(result);
+                if (method.getParameterCount() == 3) {
+                    result = method.invoke(rMethod.instance, one, two, argument);
                 } else {
-                    plugin.getLogger().warning("Relational placeholder metodu '" + relMethod.method.getName() + "' (Player, Player) parametrelerine sahip olmalıdır.");
-                    return getRelationalErrorText(relMethod);
+                    result = method.invoke(rMethod.instance, one, two);
                 }
+                return result == null ? "" : String.valueOf(result);
             } catch (Exception e) {
-                logError(relMethod.method, e);
-                return getRelationalErrorText(relMethod);
+                logError(rMethod.method, e);
+                return getRelationalErrorText(rMethod);
             }
         }
 
@@ -346,6 +393,20 @@ public final class BenthPAPIManager {
             plugin.getLogger().warning("Hata Tipi: " + cause.getClass().getSimpleName());
             plugin.getLogger().log(Level.WARNING, "Hata Mesajı ve Stack Trace:", cause);
             plugin.getLogger().warning("---------------------------------");
+        }
+    }
+
+    private static class CachedResult {
+        final String value;
+        final long timestamp;
+
+        CachedResult(String value) {
+            this.value = value;
+            this.timestamp = System.currentTimeMillis();
+        }
+
+        boolean isExpired() {
+            return System.currentTimeMillis() - timestamp > 2000;
         }
     }
 }

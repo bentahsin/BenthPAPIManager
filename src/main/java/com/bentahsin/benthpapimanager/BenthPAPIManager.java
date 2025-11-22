@@ -133,6 +133,8 @@ public final class BenthPAPIManager {
      */
     @SuppressWarnings("unused")
     public void generateDocs(String fileName) {
+        // Ensure the plugin data folder exists before writing the file
+        plugin.getDataFolder().mkdirs();
         File file = new File(plugin.getDataFolder(), fileName);
         try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
             writer.println("=== " + plugin.getName() + " Placeholder Listesi ===");

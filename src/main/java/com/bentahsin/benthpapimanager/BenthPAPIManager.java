@@ -1,9 +1,7 @@
 package com.bentahsin.benthpapimanager;
 
-import com.bentahsin.benthpapimanager.annotations.Inject;
-import com.bentahsin.benthpapimanager.annotations.Placeholder;
-import com.bentahsin.benthpapimanager.annotations.PlaceholderIdentifier;
-import com.bentahsin.benthpapimanager.annotations.RelationalPlaceholder;
+import com.bentahsin.benthpapimanager.annotations.*;
+import com.bentahsin.benthpapimanager.middleware.PlaceholderMiddleware;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
 import me.clip.placeholderapi.expansion.Relational;
 import org.bukkit.Bukkit;
@@ -12,19 +10,16 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 
-/**
- * PlaceholderAPI için anotasyon tabanlı, doğrudan sınıf kaydını destekleyen,
- * mevcut PAPI sürümüyle %100 uyumlu, kararlı bir placeholder yönetim kütüphanesi.
- */
 public final class BenthPAPIManager {
 
     private final JavaPlugin plugin;
@@ -37,53 +32,25 @@ public final class BenthPAPIManager {
         this.plugin = plugin;
     }
 
-    /**
-     * BenthPAPIManager için bir builder başlatır.
-     * @param plugin Ana plugin sınıfınız.
-     * @return Yeni bir BenthPAPIManager örneği.
-     */
     public static BenthPAPIManager create(JavaPlugin plugin) {
         return new BenthPAPIManager(plugin);
     }
 
-    /**
-     * Placeholder sınıflarına enjekte edilebilecek bir nesne kaydeder.
-     * @param type Nesnenin sınıf tipi (örn: DatabaseManager.class).
-     * @param instance Nesnenin kendisi.
-     * @return Zincirleme kullanım için kendisini döndürür.
-     */
     public BenthPAPIManager withInjectable(Class<?> type, Object instance) {
         this.injectables.put(type, instance);
         return this;
     }
 
-    /**
-     * Tüm placeholder'lar için varsayılan bir hata metni belirler.
-     * Anotasyonda belirtilen 'onError' bu değeri ezer.
-     * @param errorText Varsayılan hata metni.
-     * @return Zincirleme kullanım için kendisini döndürür.
-     */
     public BenthPAPIManager withDefaultErrorText(String errorText) {
         this.globalErrorText = errorText;
         return this;
     }
 
-    /**
-     * Kütüphane için debug modunu etkinleştirir.
-     * Etkinleştirildiğinde, konsola daha ayrıntılı hata ayıklama mesajları basılır.
-     * @return Zincirleme kullanım için kendisini döndürür.
-     */
     public BenthPAPIManager withDebugMode() {
         this.debugMode = true;
         return this;
     }
 
-    /**
-     * Belirtilen placeholder sınıflarını kaydeder.
-     * Bu metot, yapılandırma zincirinin son adımı olmalıdır.
-     * @param placeholderClasses Kaydedilecek placeholder sınıfları.
-     * @return Yapılandırmanın devam etmesi için kendisini döndürür.
-     */
     public BenthPAPIManager register(Class<?>... placeholderClasses) {
         if (plugin.getServer().getPluginManager().getPlugin("PlaceholderAPI") == null) {
             plugin.getLogger().warning("PlaceholderAPI bulunamadı, BenthPAPIManager placeholder'ları kaydedemedi.");
@@ -127,6 +94,66 @@ public final class BenthPAPIManager {
             }
         }
         return this;
+    }
+
+    @SuppressWarnings("unused")
+    public void generateDocs(String fileName) {
+        if (!plugin.getDataFolder().exists()) {
+            boolean ignored = plugin.getDataFolder().mkdirs();
+        }
+        File file = new File(plugin.getDataFolder(), fileName);
+        try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+            writer.println("=== " + plugin.getName() + " Placeholder Listesi ===");
+            writer.println("Oluşturulma Tarihi:" + java.time.LocalDateTime.now());
+            writer.println("==================================================\n");
+
+            for (PlaceholderExpansion expansion : registeredExpansions) {
+                if (expansion instanceof DynamicExpansion) {
+                    DynamicExpansion dyn = (DynamicExpansion) expansion;
+                    writer.println("GRUP: %" + dyn.getIdentifier() + "_...%");
+                    writer.println("Yazar: " + dyn.getAuthor() + " | Versiyon: " + dyn.getVersion());
+                    writer.println("--------------------------------------------------");
+
+                    for (Map.Entry<String, PlaceholderMethod> entry : dyn.standardMethods.entrySet()) {
+                        PlaceholderMethod pm = entry.getValue();
+                        String fullPapi = "%" + dyn.getIdentifier() + "_" + entry.getKey() + "%";
+
+                        writer.println("• " + fullPapi);
+
+                        if (!pm.annotation.description().isEmpty()) {
+                            writer.println("  Açıklama: " + pm.annotation.description());
+                        }
+                        if (!pm.annotation.example().isEmpty()) {
+                            writer.println("  Örnek: " + pm.annotation.example());
+                        }
+                        if (pm.permissionInfo != null) {
+                            writer.println("  Gerekli Yetki: " + pm.permissionInfo.value());
+                        }
+                        if (pm.cacheInfo != null) {
+                            writer.println("  Önbellek: " + pm.cacheInfo.duration() + " " + pm.cacheInfo.unit().toString().toLowerCase());
+                        }
+                        writer.println();
+                    }
+
+                    if (!dyn.relationalMethods.isEmpty()) {
+                        writer.println("  [İlişkisel Placeholderlar]");
+                        for (Map.Entry<String, PlaceholderMethod> entry : dyn.relationalMethods.entrySet()) {
+                            PlaceholderMethod pm = entry.getValue();
+                            String fullPapi = "%rel_" + dyn.getIdentifier() + "_" + entry.getKey() + "%";
+                            writer.println("• " + fullPapi);
+                            if (!pm.relAnnotation.description().isEmpty()) {
+                                writer.println("  Açıklama: " + pm.relAnnotation.description());
+                            }
+                            writer.println();
+                        }
+                    }
+                    writer.println("==================================================\n");
+                }
+            }
+            plugin.getLogger().info("Placeholder dokümantasyonu oluşturuldu: " + file.getPath());
+        } catch (IOException e) {
+            plugin.getLogger().log(Level.SEVERE, "Dokümantasyon oluşturulurken hata meydana geldi.", e);
+        }
     }
 
     public void unregisterAll() {
@@ -204,24 +231,34 @@ public final class BenthPAPIManager {
         final Object instance;
         final PlaceholderIdentifier annotation;
         final RelationalPlaceholder relAnnotation;
+        final Cache cacheInfo;
+        final Middleware middlewareInfo;
+        final RequirePermission permissionInfo;
 
         PlaceholderMethod(Method method, Object instance) {
             this.method = method;
             this.instance = instance;
             this.annotation = method.getAnnotation(PlaceholderIdentifier.class);
             this.relAnnotation = method.getAnnotation(RelationalPlaceholder.class);
+            this.cacheInfo = method.getAnnotation(Cache.class);
+            this.middlewareInfo = method.getAnnotation(Middleware.class);
+            this.permissionInfo = method.getAnnotation(RequirePermission.class);
         }
     }
 
     private static class DynamicExpansion extends PlaceholderExpansion implements Relational {
+        private static final long DEFAULT_ASYNC_CACHE_MS = 2000L;
+
         private final JavaPlugin plugin;
         private final Placeholder placeholderInfo;
-        private final Map<String, PlaceholderMethod> standardMethods;
-        private final Map<String, PlaceholderMethod> relationalMethods;
+        final Map<String, PlaceholderMethod> standardMethods;
+        final Map<String, PlaceholderMethod> relationalMethods;
         private final String defaultErrorText;
         private final boolean debug;
 
+        private final Map<Class<?>, PlaceholderMiddleware> middlewareInstances = new ConcurrentHashMap<>();
         private final Map<String, CachedResult> cache = new ConcurrentHashMap<>();
+        private final Set<String> pendingTasks = ConcurrentHashMap.newKeySet();
 
         DynamicExpansion(JavaPlugin plugin, Placeholder info, Map<String, PlaceholderMethod> standardMethods, Map<String, PlaceholderMethod> relationalMethods, String defaultErrorText, boolean debug) {
             this.plugin = plugin;
@@ -294,43 +331,130 @@ public final class BenthPAPIManager {
         }
 
         private String handleStandard(OfflinePlayer viewer, PlaceholderMethod pMethod, String arg, String fullParams) {
-            if (pMethod.annotation.async()) {
-                String cacheKey = "std:" + (viewer != null ? viewer.getUniqueId() : "null") + ":" + fullParams;
-                CachedResult cached = cache.get(cacheKey);
+            if (pMethod.permissionInfo != null) {
+                if (viewer == null || !viewer.isOnline()) {
+                    return pMethod.permissionInfo.onDeny();
+                }
+                if (!viewer.getPlayer().hasPermission(pMethod.permissionInfo.value())) {
+                    return pMethod.permissionInfo.onDeny();
+                }
+            }
 
-                if (cached != null && !cached.isExpired()) {
-                    return cached.value;
+            String cacheKey = "std:" + (viewer != null ? viewer.getUniqueId() : "null") + ":" + fullParams;
+
+            CachedResult cached = cache.get(cacheKey);
+            long cacheDuration = pMethod.cacheInfo != null
+                    ? pMethod.cacheInfo.unit().toMillis(pMethod.cacheInfo.duration())
+                    : DEFAULT_ASYNC_CACHE_MS;
+
+            if (cached != null && !cached.isExpired(cacheDuration)) {
+                return cached.value;
+            }
+
+            if (pMethod.annotation.async()) {
+                if (pendingTasks.contains(cacheKey)) {
+                    return cached != null ? cached.value : pMethod.annotation.onLoading();
                 }
 
+                pendingTasks.add(cacheKey);
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    String result = executeStandard(viewer, pMethod, arg);
-                    cache.put(cacheKey, new CachedResult(result));
+                    try {
+                        String rawResult = executeStandard(viewer, pMethod, arg);
+                        String finalResult = applyMiddleware(rawResult, pMethod);
+                        cache.put(cacheKey, new CachedResult(finalResult));
+                    } finally {
+                        pendingTasks.remove(cacheKey);
+                    }
                 });
 
                 return cached != null ? cached.value : pMethod.annotation.onLoading();
             }
 
-            return executeStandard(viewer, pMethod, arg);
+            String rawResult = executeStandard(viewer, pMethod, arg);
+            String finalResult = applyMiddleware(rawResult, pMethod);
+
+            if (pMethod.cacheInfo != null) {
+                cache.put(cacheKey, new CachedResult(finalResult));
+            }
+
+            return finalResult;
         }
 
         private String handleRelational(Player one, Player two, PlaceholderMethod rMethod, String arg, String fullParams) {
-            if (rMethod.relAnnotation.async()) {
-                String cacheKey = "rel:" + one.getUniqueId() + ":" + two.getUniqueId() + ":" + fullParams;
-                CachedResult cached = cache.get(cacheKey);
+            if (rMethod.permissionInfo != null) {
+                if (!one.hasPermission(rMethod.permissionInfo.value())) {
+                    return rMethod.permissionInfo.onDeny();
+                }
+            }
 
-                if (cached != null && !cached.isExpired()) {
-                    return cached.value;
+            String cacheKey = "rel:" + one.getUniqueId() + ":" + two.getUniqueId() + ":" + fullParams;
+
+            CachedResult cached = cache.get(cacheKey);
+            long cacheDuration = rMethod.cacheInfo != null
+                    ? rMethod.cacheInfo.unit().toMillis(rMethod.cacheInfo.duration())
+                    : DEFAULT_ASYNC_CACHE_MS;
+
+            if (cached != null && !cached.isExpired(cacheDuration)) {
+                return cached.value;
+            }
+
+            if (rMethod.relAnnotation.async()) {
+                if (pendingTasks.contains(cacheKey)) {
+                    return cached != null ? cached.value : rMethod.relAnnotation.onLoading();
                 }
 
+                pendingTasks.add(cacheKey);
                 Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> {
-                    String result = executeRelational(one, two, rMethod, arg);
-                    cache.put(cacheKey, new CachedResult(result));
+                    try {
+                        String rawResult = executeRelational(one, two, rMethod, arg);
+                        String finalResult = applyMiddleware(rawResult, rMethod);
+                        cache.put(cacheKey, new CachedResult(finalResult));
+                    } finally {
+                        pendingTasks.remove(cacheKey);
+                    }
                 });
 
                 return cached != null ? cached.value : rMethod.relAnnotation.onLoading();
             }
 
-            return executeRelational(one, two, rMethod, arg);
+            String rawResult = executeRelational(one, two, rMethod, arg);
+            String finalResult = applyMiddleware(rawResult, rMethod);
+
+            if (rMethod.cacheInfo != null) {
+                cache.put(cacheKey, new CachedResult(finalResult));
+            }
+
+            return finalResult;
+        }
+
+        private String applyMiddleware(String rawResult, PlaceholderMethod pMethod) {
+            if (pMethod.middlewareInfo == null || rawResult == null) {
+                return rawResult == null ? "" : rawResult;
+            }
+
+            Object currentResult = rawResult;
+            try {
+                for (Class<? extends PlaceholderMiddleware> middlewareClass : pMethod.middlewareInfo.value()) {
+                    PlaceholderMiddleware middleware = middlewareInstances.computeIfAbsent(middlewareClass, clazz -> {
+                        try {
+                            return (PlaceholderMiddleware) clazz.getDeclaredConstructor().newInstance();
+                        } catch (Exception e) {
+                            plugin.getLogger().log(Level.SEVERE, "Middleware sınıfı başlatılamadı: " + clazz.getName(), e);
+                            return null;
+                        }
+                    });
+
+                    if (middleware != null) {
+                        currentResult = middleware.process(currentResult);
+                        if (currentResult == null) return "";
+                    }
+                }
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "Middleware uygulanırken hata oluştu (" + pMethod.method.getName() + ")", e);
+                return getErrorText(pMethod);
+            }
+
+            return String.valueOf(currentResult);
         }
 
         private String executeStandard(OfflinePlayer viewer, PlaceholderMethod pMethod, String argument) {
@@ -405,8 +529,8 @@ public final class BenthPAPIManager {
             this.timestamp = System.currentTimeMillis();
         }
 
-        boolean isExpired() {
-            return System.currentTimeMillis() - timestamp > 2000;
+        boolean isExpired(long durationMillis) {
+            return System.currentTimeMillis() - timestamp > durationMillis;
         }
     }
 }

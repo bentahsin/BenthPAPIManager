@@ -37,4 +37,16 @@ public @interface RelationalPlaceholder {
      * @return Yükleniyor metni.
      */
     String onLoading() default "§eHesaplanıyor...§r";
+
+    /**
+     * Placeholder açıklaması için opsiyonel alan
+     * @return Açıklama
+     */
+    String description() default "";
+
+    /**
+     * Örnek kullanım için opsiyonel alan
+     * @return Örnek
+     */
+    String example() default "";
 }

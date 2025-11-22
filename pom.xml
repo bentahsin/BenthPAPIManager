@@ -6,7 +6,7 @@
 
     <groupId>com.bentahsin</groupId>
     <artifactId>benth-papi-manager</artifactId>
-    <version>1.0.3-b2</version>
+    <version>1.0.3-b3</version>
     <packaging>jar</packaging>
 
     <name>BenthPapiManager</name>

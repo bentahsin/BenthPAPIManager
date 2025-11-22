@@ -4,7 +4,7 @@
 
 BenthPapiManager, PlaceholderAPI için yeni placeholder'lar oluşturma sürecini kökten değiştirir. Karmaşık `PlaceholderExpansion` sınıfları yazmak, metotları manuel olarak yönlendirmek ve bağımlılıkları yönetmek yerine, BenthPapiManager size temiz, okunabilir ve "sadece çalışan" bir yapı sunar.
 
-![Java 8+](https://img.shields.io/badge/Java-8%2B-blue?style=for-the-badge&logo=java)![Spigot API](https://img.shields.io/badge/API-Spigot%20Uyumlu-orange?style=for-the-badge)![Maven](https://img.shields.io/badge/Maven-v1.0.3--b1-brightgreen?style=for-the-badge&logo=apache-maven)![Uyumluluk](https://img.shields.io/badge/Uyumlu-Spigot%2C_Paper_%26_Other_Forks_Of_Spigot-brightgreen?style=for-the-badge)
+![Java 8+](https://img.shields.io/badge/Java-8%2B-blue?style=for-the-badge&logo=java)![Spigot API](https://img.shields.io/badge/API-Spigot%20Uyumlu-orange?style=for-the-badge)![Maven](https://img.shields.io/badge/Maven-v1.0.3--b3-brightgreen?style=for-the-badge&logo=apache-maven)![Uyumluluk](https://img.shields.io/badge/Uyumlu-Spigot%2C_Paper_%26_Other_Forks_Of_Spigot-brightgreen?style=for-the-badge)
 
 ---
 

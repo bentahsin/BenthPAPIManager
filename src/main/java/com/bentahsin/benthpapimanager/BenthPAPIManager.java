@@ -8,6 +8,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
@@ -161,6 +162,9 @@ public final class BenthPAPIManager {
             plugin.getLogger().info(registeredExpansions.size() + " adet placeholder grubu kaldırılıyor...");
             for (PlaceholderExpansion expansion : registeredExpansions) {
                 try {
+                    if (expansion instanceof DynamicExpansion) {
+                        ((DynamicExpansion) expansion).shutdown();
+                    }
                     expansion.unregister();
                 } catch (Exception e) {
                     plugin.getLogger().log(Level.WARNING, "'" + expansion.getIdentifier() + "' placeholder'ı kaldırılırken bir hata oluştu.", e);
@@ -256,6 +260,7 @@ public final class BenthPAPIManager {
         private final String defaultErrorText;
         private final boolean debug;
 
+        private final BukkitTask cleanupTask;
         private final Map<Class<?>, PlaceholderMiddleware> middlewareInstances = new ConcurrentHashMap<>();
         private final Map<String, CachedResult> cache = new ConcurrentHashMap<>();
         private final Set<String> pendingTasks = ConcurrentHashMap.newKeySet();
@@ -267,6 +272,21 @@ public final class BenthPAPIManager {
             this.relationalMethods = relationalMethods;
             this.defaultErrorText = defaultErrorText;
             this.debug = debug;
+
+            this.cleanupTask = Bukkit.getScheduler().runTaskTimerAsynchronously(plugin, this::cleanupCache, 1200L, 1200L);
+        }
+
+        public void shutdown() {
+            if (cleanupTask != null && !cleanupTask.isCancelled()) {
+                cleanupTask.cancel();
+            }
+            cache.clear();
+            pendingTasks.clear();
+        }
+
+        private void cleanupCache() {
+            if (cache.isEmpty()) return;
+            cache.entrySet().removeIf(entry -> entry.getValue().isExpired());
         }
 
         @Override public @NotNull String getIdentifier() { return placeholderInfo.identifier(); }
@@ -335,7 +355,7 @@ public final class BenthPAPIManager {
                 if (viewer == null || !viewer.isOnline()) {
                     return pMethod.permissionInfo.onDeny();
                 }
-                if (!viewer.getPlayer().hasPermission(pMethod.permissionInfo.value())) {
+                if (viewer.getPlayer() != null && !viewer.getPlayer().hasPermission(pMethod.permissionInfo.value())) {
                     return pMethod.permissionInfo.onDeny();
                 }
             }
@@ -343,11 +363,11 @@ public final class BenthPAPIManager {
             String cacheKey = "std:" + (viewer != null ? viewer.getUniqueId() : "null") + ":" + fullParams;
 
             CachedResult cached = cache.get(cacheKey);
-            long cacheDuration = pMethod.cacheInfo != null
+            long duration = pMethod.cacheInfo != null
                     ? pMethod.cacheInfo.unit().toMillis(pMethod.cacheInfo.duration())
                     : DEFAULT_ASYNC_CACHE_MS;
 
-            if (cached != null && !cached.isExpired(cacheDuration)) {
+            if (cached != null && !cached.isExpired()) {
                 return cached.value;
             }
 
@@ -361,7 +381,7 @@ public final class BenthPAPIManager {
                     try {
                         String rawResult = executeStandard(viewer, pMethod, arg);
                         String finalResult = applyMiddleware(rawResult, pMethod);
-                        cache.put(cacheKey, new CachedResult(finalResult));
+                        cache.put(cacheKey, new CachedResult(finalResult, duration));
                     } finally {
                         pendingTasks.remove(cacheKey);
                     }
@@ -374,7 +394,7 @@ public final class BenthPAPIManager {
             String finalResult = applyMiddleware(rawResult, pMethod);
 
             if (pMethod.cacheInfo != null) {
-                cache.put(cacheKey, new CachedResult(finalResult));
+                cache.put(cacheKey, new CachedResult(finalResult, duration));
             }
 
             return finalResult;
@@ -390,11 +410,11 @@ public final class BenthPAPIManager {
             String cacheKey = "rel:" + one.getUniqueId() + ":" + two.getUniqueId() + ":" + fullParams;
 
             CachedResult cached = cache.get(cacheKey);
-            long cacheDuration = rMethod.cacheInfo != null
+            long duration = rMethod.cacheInfo != null
                     ? rMethod.cacheInfo.unit().toMillis(rMethod.cacheInfo.duration())
                     : DEFAULT_ASYNC_CACHE_MS;
 
-            if (cached != null && !cached.isExpired(cacheDuration)) {
+            if (cached != null && !cached.isExpired()) {
                 return cached.value;
             }
 
@@ -408,7 +428,7 @@ public final class BenthPAPIManager {
                     try {
                         String rawResult = executeRelational(one, two, rMethod, arg);
                         String finalResult = applyMiddleware(rawResult, rMethod);
-                        cache.put(cacheKey, new CachedResult(finalResult));
+                        cache.put(cacheKey, new CachedResult(finalResult, duration));
                     } finally {
                         pendingTasks.remove(cacheKey);
                     }
@@ -421,7 +441,7 @@ public final class BenthPAPIManager {
             String finalResult = applyMiddleware(rawResult, rMethod);
 
             if (rMethod.cacheInfo != null) {
-                cache.put(cacheKey, new CachedResult(finalResult));
+                cache.put(cacheKey, new CachedResult(finalResult, duration));
             }
 
             return finalResult;
@@ -463,25 +483,42 @@ public final class BenthPAPIManager {
                 Object instance = pMethod.instance;
                 Object result = null;
                 int count = method.getParameterCount();
+                Class<?>[] paramTypes = method.getParameterTypes();
 
                 if (count == 0) {
                     result = method.invoke(instance);
                 } else if (count == 1) {
-                    if (method.getParameterTypes()[0] == String.class) {
+                    Class<?> type = paramTypes[0];
+                    if (type == String.class) {
                         result = method.invoke(instance, argument);
-                    } else {
-                        Object pArg = viewer != null && viewer.isOnline() ? viewer.getPlayer() : viewer;
-                        if (pArg != null && method.getParameterTypes()[0].isAssignableFrom(pArg.getClass())) {
-                            result = method.invoke(instance, pArg);
-                        } else if (pArg == null) {
-                            return "";
+                    }
+                    else if (OfflinePlayer.class.isAssignableFrom(type)) {
+                        result = method.invoke(instance, viewer);
+                    }
+                    else if (Player.class.isAssignableFrom(type)) {
+                        if (viewer != null && viewer.isOnline()) {
+                            result = method.invoke(instance, viewer.getPlayer());
                         } else {
-                            return getErrorText(pMethod);
+                            return "";
                         }
+                    } else {
+                        return getErrorText(pMethod);
                     }
                 } else if (count == 2) {
-                    Object pArg = viewer != null && viewer.isOnline() ? viewer.getPlayer() : viewer;
-                    result = method.invoke(instance, pArg, argument);
+                    Object pArg = null;
+                    Class<?> type = paramTypes[0];
+
+                    if (OfflinePlayer.class.isAssignableFrom(type)) {
+                        pArg = viewer;
+                    } else if (Player.class.isAssignableFrom(type)) {
+                        if (viewer != null && viewer.isOnline()) pArg = viewer.getPlayer();
+                    }
+
+                    if (pArg != null) {
+                        result = method.invoke(instance, pArg, argument);
+                    } else if (Player.class.isAssignableFrom(type)) {
+                        return "";
+                    }
                 }
 
                 return result == null ? "" : String.valueOf(result);
@@ -522,15 +559,15 @@ public final class BenthPAPIManager {
 
     private static class CachedResult {
         final String value;
-        final long timestamp;
+        final long expireAt;
 
-        CachedResult(String value) {
+        CachedResult(String value, long durationMillis) {
             this.value = value;
-            this.timestamp = System.currentTimeMillis();
+            this.expireAt = System.currentTimeMillis() + durationMillis;
         }
 
-        boolean isExpired(long durationMillis) {
-            return System.currentTimeMillis() - timestamp > durationMillis;
+        boolean isExpired() {
+            return System.currentTimeMillis() > expireAt;
         }
     }
 }
